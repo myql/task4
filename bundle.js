@@ -12335,13 +12335,16 @@
 	 * Set Authorization field value with `user` and `pass`.
 	 *
 	 * @param {String} user
-	 * @param {String} pass
-	 * @param {Object} options with 'type' property 'auto' or 'basic' (default 'basic')
+	 * @param {String} [pass] optional in case of using 'bearer' as type
+	 * @param {Object} options with 'type' property 'auto', 'basic' or 'bearer' (default 'basic')
 	 * @return {Request} for chaining
 	 * @api public
 	 */
 
 	Request.prototype.auth = function(user, pass, options){
+	  if (typeof pass === 'object' && pass !== null) { // pass is optional and can substitute for options
+	    options = pass;
+	  }
 	  if (!options) {
 	    options = {
 	      type: 'function' === typeof btoa ? 'basic' : 'auto',
@@ -12357,6 +12360,10 @@
 	      this.username = user;
 	      this.password = pass;
 	    break;
+	      
+	    case 'bearer': // usage would be .auth(accessToken, { type: 'bearer' })
+	      this.set('Authorization', 'Bearer ' + user);
+	    break;  
 	  }
 	  return this;
 	};
@@ -12399,11 +12406,13 @@
 	 */
 
 	Request.prototype.attach = function(field, file, options){
-	  if (this._data) {
-	    throw Error("superagent can't mix .send() and .attach()");
-	  }
+	  if (file) {
+	    if (this._data) {
+	      throw Error("superagent can't mix .send() and .attach()");
+	    }
 
-	  this._getFormData().append(field, file, options || file.name);
+	    this._getFormData().append(field, file, options || file.name);
+	  }
 	  return this;
 	};
 
@@ -12890,7 +12899,7 @@
 	"use strict";
 
 
-	module.exports = '2.1.1';
+	module.exports = '2.1.3';
 
 	/***/ }),
 	/* 13 */
@@ -13023,7 +13032,7 @@
 	    } else {
 	      delete permissions[accessType];
 	      if (_.isEmpty(permissions)) {
-	        delete permissions[userId];
+	        delete this.permissionsById[userId];
 	      }
 	    }
 	  };
@@ -13899,8 +13908,12 @@
 
 	      var name = this.attributes.name;
 
+	      var extName = extname(name);
+	      if (!extName && this._extName) {
+	        name += this._extName;
+	        extName = this._extName;
+	      }
 	      // Create 16-bits uuid as qiniu key.
-	      var extName = extname(name) || this._extName;
 	      var key = hexOctet() + hexOctet() + hexOctet() + hexOctet() + hexOctet() + extName;
 	      var data = {
 	        key: key,
@@ -14242,30 +14255,24 @@
 	*/
 
 	AV.init = function () {
-	  switch (arguments.length) {
-	    case 1:
-	      var options = arguments.length <= 0 ? undefined : arguments[0];
-	      if ((typeof options === 'undefined' ? 'undefined' : _typeof(options)) === 'object') {
-	        if ("Browser" && options.masterKey) {
-	          masterKeyWarn();
-	        }
-	        initialize(options.appId, options.appKey, options.masterKey, options.hookKey);
-	        request.setServerUrlByRegion(options.region);
-	        AV._config.disableCurrentUser = options.disableCurrentUser;
-	      } else {
-	        throw new Error('AV.init(): Parameter is not correct.');
-	      }
-	      break;
-	    // 兼容旧版本的初始化方法
-	    case 2:
-	    case 3:
-	      console.warn('Please use AV.init() to replace AV.initialize(), ' + 'AV.init() need an Object param, like { appId: \'YOUR_APP_ID\', appKey: \'YOUR_APP_KEY\' } . ' + 'Docs: https://leancloud.cn/docs/sdk_setup-js.html');
-	      if ("Browser" && arguments.length === 3) {
+	  if (arguments.length === 1) {
+	    var options = arguments.length <= 0 ? undefined : arguments[0];
+	    if ((typeof options === 'undefined' ? 'undefined' : _typeof(options)) === 'object') {
+	      if ("Browser" && options.masterKey) {
 	        masterKeyWarn();
 	      }
-	      initialize.apply(undefined, arguments);
-	      request.setServerUrlByRegion('cn');
-	      break;
+	      initialize(options.appId, options.appKey, options.masterKey, options.hookKey);
+	      request.setServerUrlByRegion(options.region);
+	    } else {
+	      throw new Error('AV.init(): Parameter is not correct.');
+	    }
+	  } else {
+	    // 兼容旧版本的初始化方法
+	    if ("Browser" && (arguments.length <= 3 ? undefined : arguments[3])) {
+	      masterKeyWarn();
+	    }
+	    initialize.apply(undefined, arguments);
+	    request.setServerUrlByRegion('cn');
 	  }
 	};
 
@@ -17003,7 +17010,7 @@
 	    destroyAll: function destroyAll(options) {
 	      var self = this;
 	      return self.find(options).then(function (objects) {
-	        return AV.Object.destroyAll(objects);
+	        return AV.Object.destroyAll(objects, options);
 	      });
 	    },
 
@@ -19202,7 +19209,9 @@
 
 	      return AVRequest('users/' + this.id + '/refreshSessionToken', null, null, 'PUT', null, options).then(function (response) {
 	        _this5._finishFetch(response);
-	        return _this5;
+	        return _this5._handleSaveResult(true).then(function () {
+	          return _this5;
+	        });
 	      });
 	    },
 
@@ -20203,7 +20212,7 @@
 	 * Expose `debug()` as the module.
 	 */
 
-	exports = module.exports = createDebug.debug = createDebug.default = createDebug;
+	exports = module.exports = createDebug.debug = createDebug['default'] = createDebug;
 	exports.coerce = coerce;
 	exports.disable = disable;
 	exports.enable = enable;
@@ -20335,6 +20344,9 @@
 	function enable(namespaces) {
 	  exports.save(namespaces);
 
+	  exports.names = [];
+	  exports.skips = [];
+
 	  var split = (namespaces || '').split(/[\s,]+/);
 	  var len = split.length;
 
@@ -20405,7 +20417,7 @@
 	 * @copyright Copyright (c) 2014 Yehuda Katz, Tom Dale, Stefan Penner and contributors (Conversion to ES6 API by Jake Archibald)
 	 * @license   Licensed under MIT license
 	 *            See https://raw.githubusercontent.com/stefanpenner/es6-promise/master/LICENSE
-	 * @version   4.0.5
+	 * @version   4.1.0
 	 */
 
 	(function (global, factory) {
@@ -20713,6 +20725,7 @@
 	  } else {
 	    if (then$$ === GET_THEN_ERROR) {
 	      _reject(promise, GET_THEN_ERROR.error);
+	      GET_THEN_ERROR.error = null;
 	    } else if (then$$ === undefined) {
 	      fulfill(promise, maybeThenable);
 	    } else if (isFunction(then$$)) {
@@ -20833,7 +20846,7 @@
 	    if (value === TRY_CATCH_ERROR) {
 	      failed = true;
 	      error = value.error;
-	      value = null;
+	      value.error = null;
 	    } else {
 	      succeeded = true;
 	    }
@@ -21557,6 +21570,7 @@
 
 	})));
 	//# sourceMappingURL=es6-promise.map
+
 	/* WEBPACK VAR INJECTION */}.call(exports, __webpack_require__(9)))
 
 	/***/ }),
@@ -22142,11 +22156,17 @@
 	    return this;
 	  }
 
-	  if ('undefined' !== typeof options.deadline) {
-	    this._timeout = options.deadline;
-	  }
-	  if ('undefined' !== typeof options.response) {
-	    this._responseTimeout = options.response;
+	  for(var option in options) {
+	    switch(option) {
+	      case 'deadline':
+	        this._timeout = options.deadline;
+	        break;
+	      case 'response':
+	        this._responseTimeout = options.response;
+	        break;
+	      default:
+	        console.warn("Unknown timeout option", option);
+	    }
 	  }
 	  return this;
 	};
@@ -22409,9 +22429,10 @@
 	 * @api public
 	 */
 
-	RequestBase.prototype.withCredentials = function(){
+	RequestBase.prototype.withCredentials = function(on){
 	  // This is browser-only functionality. Node side is no-op.
-	  this._withCredentials = true;
+	  if(on==undefined) on = true;
+	  this._withCredentials = on;
 	  return this;
 	};
 
@@ -22575,13 +22596,14 @@
 	 * @api private
 	 */
 
-	RequestBase.prototype._timeoutError = function(reason, timeout){
+	RequestBase.prototype._timeoutError = function(reason, timeout, errno){
 	  if (this._aborted) {
 	    return;
 	  }
 	  var err = new Error(reason + timeout + 'ms exceeded');
 	  err.timeout = timeout;
 	  err.code = 'ECONNABORTED';
+	  err.errno = errno;
 	  this.timedout = true;
 	  this.abort();
 	  this.callback(err);
@@ -22593,13 +22615,13 @@
 	  // deadline
 	  if (this._timeout && !this._timer) {
 	    this._timer = setTimeout(function(){
-	      self._timeoutError('Timeout of ', self._timeout);
+	      self._timeoutError('Timeout of ', self._timeout, 'ETIME');
 	    }, this._timeout);
 	  }
 	  // response timeout
 	  if (this._responseTimeout && !this._responseTimeoutTimer) {
 	    this._responseTimeoutTimer = setTimeout(function(){
-	      self._timeoutError('Response timeout of ', self._responseTimeout);
+	      self._timeoutError('Response timeout of ', self._responseTimeout, 'ETIMEDOUT');
 	    }, this._responseTimeout);
 	  }
 	}
